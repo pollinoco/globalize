@@ -1,0 +1,22 @@
+mysql:
+  adapter: mysql2
+  host: <%= ENV.fetch("MYSQL_HOST", "0.0.0.0") %>
+  port: <%= ENV.fetch("MYSQL_PORT", 3306) %>
+  database: globalize_test
+  username: root
+  password: <%= ENV.fetch("MYSQL_PASSWORD", "") %>
+  encoding: utf8
+
+postgresql:
+  adapter: postgresql
+  host: <%= ENV.fetch("PGHOST", "localhost") %>
+  port: <%= ENV.fetch("PGPORT", 5432) %>
+  database: globalize_test
+  username: postgres
+  password: <%= ENV.fetch("PGPASSWORD", "") %>
+  encoding: utf8
+
+sqlite3:
+  adapter: sqlite3
+  database: ":memory:"
+  encoding: utf8

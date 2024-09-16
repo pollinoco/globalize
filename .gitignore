@@ -1,0 +1,15 @@
+doc
+spec/spec/db/*
+vendor
+NOTES
+.DS_Store
+.bundle
+Gemfile*.lock
+.rvmrc
+*.sw*
+*.gem
+.rbx
+.ruby-version
+test/globalize_test.log
+gemfiles/*.lock
+tmp/
