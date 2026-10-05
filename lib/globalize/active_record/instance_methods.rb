@@ -12,29 +12,18 @@ module Globalize
       end
 
       def attributes=(new_attributes, *options)
-        super unless new_attributes.respond_to?(:stringify_keys) && new_attributes.present?
+        unless new_attributes.respond_to?(:stringify_keys) && new_attributes.present?
+          super
+          return
+        end
+
         attributes = new_attributes.stringify_keys
         with_given_locale(attributes) { super(attributes.except("locale"), *options) }
       end
 
-      if Globalize.rails_52?
-
-        # In Rails 5.2 we need to override *_assign_attributes* as it's called earlier
-        # in the stack (before *assign_attributes*)
-        # See https://github.com/rails/rails/blob/5-2-stable/activerecord/lib/active_record/attribute_assignment.rb#L12
-        def _assign_attributes(new_attributes)
-          attributes = new_attributes.stringify_keys
-          with_given_locale(attributes) { super(attributes.except("locale")) }
-        end
-
-      else
-
-        def assign_attributes(new_attributes, *options)
-          super unless new_attributes.respond_to?(:stringify_keys) && new_attributes.present?
-          attributes = new_attributes.stringify_keys
-          with_given_locale(attributes) { super(attributes.except("locale"), *options) }
-        end
-
+      def _assign_attributes(new_attributes)
+        attributes = new_attributes.stringify_keys
+        with_given_locale(attributes) { super(attributes.except("locale")) }
       end
 
       def write_attribute(name, value, *args, &block)
@@ -125,14 +114,18 @@ module Globalize
       end
 
       def translation_for(locale, build_if_missing = true)
-        unless translation_caches[locale]
-          # Fetch translations from database as those in the translation collection may be incomplete
-          _translation = translations.detect{|t| t.locale.to_s == locale.to_s}
-          _translation ||= translations.with_locale(locale).first unless translations.loaded?
-          _translation ||= translations.build(:locale => locale) if build_if_missing
-          translation_caches[locale] = _translation if _translation
+        locale = locale.to_sym
+        if translation_caches.key?(locale)
+          cached = translation_caches[locale]
+          return cached if cached || !build_if_missing
         end
-        translation_caches[locale]
+
+        # detect loads the association once. A second per-locale query is slower
+        # when the record has more than one translation (the usual case).
+        found = translations.detect { |translation| translation.locale.to_s == locale.to_s }
+        found ||= translations.build(locale: locale.to_s) if build_if_missing
+        translation_caches[locale] = found
+        found
       end
 
       def translation_caches
@@ -158,78 +151,55 @@ module Globalize
         Globalize.fallbacks(locale)
       end
 
-      if Globalize.ruby_27?
-        class_eval <<~RUBY, __FILE__, __LINE__ + 1
-          def save(...)
-            result = Globalize.with_locale(translation.locale || I18n.default_locale) do
-              without_fallbacks do
-                super
-              end
-            end
-            if result
-              globalize.clear_dirty
-            end
-
-            result
-          end
-        RUBY
-      else
-        def save(*)
-          result = Globalize.with_locale(translation.locale || I18n.default_locale) do
-            without_fallbacks do
-              super
-            end
-          end
-          if result
-            globalize.clear_dirty
-          end
-
-          result
-        end
+      def save(...)
+        globalize_clear_dirty { super }
       end
 
-      def column_for_attribute name
-        return super if translated_attribute_names.exclude?(name)
+      def save!(...)
+        globalize_clear_dirty { super }
+      end
 
-        globalize.send(:column_for_attribute, name)
+      def column_for_attribute(name)
+        return globalize.send(:column_for_attribute, name) if translated?(name)
+
+        super
       end
 
       def cache_key
-        [super, translation.cache_key].join("/")
+        current = translation_for(::Globalize.locale, false)
+        current ? "#{super}/#{current.cache_key}" : super
       end
 
+      # Do not query translations that were never loaded: a persisted row cannot
+      # be dirty until this process has it in memory. Building a blank
+      # translation just to answer changed? used to mark the parent dirty.
       def changed?
-        changed_attributes.present? || translations.any?(&:changed?)
+        super || meaningful_translation_changes?
       end
 
-      if Globalize.rails_51?
-        def saved_changes
-          super.tap do |changes|
-            translation = translation_for(::Globalize.locale, false)
-            if translation
-              translation_changes = translation.saved_changes.select { |name| translated?(name) }
-              changes.merge!(translation_changes) if translation_changes.any?
-            end
+      def saved_changes
+        super.tap do |changes|
+          translation = translation_for(::Globalize.locale, false)
+          if translation
+            translation_changes = translation.saved_changes.select { |name| translated?(name) }
+            changes.merge!(translation_changes) if translation_changes.any?
           end
         end
       end
 
-      if Globalize.rails_6?
-        def changed_attributes
-          super.merge(globalize.changed_attributes(::Globalize.locale))
-        end
-
-        def changes
-          super.merge(globalize.changes(::Globalize.locale))
-        end
-
-        def changed
-          super.concat(globalize.changed).uniq
-        end
+      def changed_attributes
+        super.merge(globalize.changed_attributes(::Globalize.locale))
       end
 
-      # need to access instance variable directly since changed_attributes
-      # is frozen as of Rails 4.2
+      def changes
+        super.merge(globalize.changes(::Globalize.locale))
+      end
+
+      def changed
+        super.concat(globalize.changed).uniq
+      end
+
+      # need to access instance variable directly since changed_attributes is frozen
       def original_changed_attributes
         @changed_attributes
       end
@@ -245,9 +215,24 @@ module Globalize
       end
 
       def used_locales
-        locales = globalize.stash.keys.concat(globalize.stash.keys).concat(translations.translated_locales)
+        locales = globalize.stash.keys.dup
+        if translations.loaded?
+          locales.concat(translations.map { |translation| translation.locale })
+        elsif persisted?
+          locales.concat(translations.translated_locales)
+        end
+        locales.map! { |locale| locale.to_sym }
         locales.uniq!
         locales
+      end
+
+      def meaningful_translation_changes?
+        candidates = []
+        candidates.concat(translations.target) if translations.loaded?
+        candidates.concat(translation_caches.values)
+        candidates.compact.uniq.any? do |translation|
+          translation.changed.map(&:to_s).any? { |name| name != "locale" }
+        end
       end
 
       def save_translations!
@@ -280,6 +265,12 @@ module Globalize
         return nil unless translated?(name)
 
         globalize.fetch(options[:locale] || Globalize.locale, name)
+      end
+
+      def globalize_clear_dirty
+        result = without_fallbacks { yield }
+        globalize.clear_dirty if result
+        result
       end
     end
   end

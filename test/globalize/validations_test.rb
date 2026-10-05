@@ -143,6 +143,16 @@ class ValidationsTest < Minitest::Spec
       assert !ScopedValidatee.new(:another_integer => 1).valid?
       assert ScopedValidatee.new(:another_integer => 0).valid?
     end
+
+    it 'runs a callable :conditions option against the translation relation' do
+      Validatee.class_eval do
+        validates_uniqueness_of :string, conditions: ->(_record) { where.not(id: 0) }
+      end
+
+      Validatee.create!(:string => 'cond-a')
+      assert !Validatee.new(:string => 'cond-a').valid?
+      assert Validatee.new(:string => 'cond-b').valid?
+    end
   end
 
   # describe ".validates_associated" do

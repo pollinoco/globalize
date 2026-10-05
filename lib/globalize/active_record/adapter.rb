@@ -44,6 +44,10 @@ module Globalize
             translation[name] = value
           end
 
+          # Assigning the current value still lands in the stash. Skip the
+          # UPDATE when Active Record does not see a real change.
+          next if translation.persisted? && !translation.changed?
+
           ensure_foreign_key_for(translation)
           translation.save!
         end
@@ -59,8 +63,7 @@ module Globalize
 
       # Sometimes the translation is initialised before a foreign key can be set.
       def ensure_foreign_key_for(translation)
-        # AR >= 4.1 reflections renamed to _reflections
-        translation[translation.class.reflections.stringify_keys["globalized_model"].foreign_key] = record.id
+        translation[record.class.translation_options[:foreign_key]] = record.id
       end
 
       def type_cast(name, value)
@@ -79,11 +82,16 @@ module Globalize
 
       def fetch_attribute(locale, name)
         translation = record.translation_for(locale, false)
-        if translation
-          translation.send(name)
-        else
-          record.class.translation_class.new.send(name)
-        end
+        return translation.public_send(name) if translation
+
+        # A plain column with a NULL default does not need a throwaway record.
+        # Serialized columns (Array, Hash) still do: the coder supplies [] or {}.
+        column = column_for_attribute(name)
+        type = translation_class.type_for_attribute(name.to_s)
+        serialized = defined?(::ActiveRecord::Type::Serialized) && type.is_a?(::ActiveRecord::Type::Serialized)
+        return if column.nil? || (column.default.nil? && !serialized)
+
+        translation_class.new.public_send(name)
       end
 
       def set_metadata(object, metadata)
@@ -92,7 +100,8 @@ module Globalize
       end
 
       def translation_metadata_accessor(object)
-        return if obj.respond_to?(:translation_metadata)
+        return if object.respond_to?(:translation_metadata)
+
         class << object; attr_accessor :translation_metadata end
         object.translation_metadata ||= {}
       end

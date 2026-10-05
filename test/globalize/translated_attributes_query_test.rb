@@ -35,8 +35,15 @@ class TranslatedAttributesQueryTest < Minitest::Spec
     end
 
     it 'does not join translations table if query contains no translated attributes' do
-      assert_equal User.group(:id, :email).send(method, :name => 'foo').joins_values, [:translations]
-      assert_equal [], User.group(:id, :email).send(method, :email => 'foo@example.com').joins_values
+      translated = User.group(:id, :email).send(method, :name => 'foo')
+      plain = User.group(:id, :email).send(method, :email => 'foo@example.com')
+      if method == :where
+        assert_equal [], translated.joins_values
+        assert_match(/EXISTS/i, translated.to_sql)
+      else
+        assert_equal [:translations], translated.joins_values
+      end
+      assert_equal [], plain.joins_values
     end
 
     it 'does not join translation table if already joined with with_translations' do
@@ -61,39 +68,37 @@ class TranslatedAttributesQueryTest < Minitest::Spec
         it 'returns record in order, column as symbol' do
           @order = Post.where(:title => 'title').send(method, :title)
 
-          case Globalize::Test::Database.driver
-          when 'mysql'
-            assert_match(/ORDER BY `post_translations`.`title` ASC/, @order.to_sql)
-          else
-            assert_match(/ORDER BY "post_translations"."title" ASC/, @order.to_sql)
-          end
+          assert_match(/ORDER BY \(SELECT/i, @order.to_sql)
+          assert_match(/title/i, @order.to_sql)
+          assert_match(/ASC/, @order.to_sql)
+          assert_equal [], @order.joins_values
         end
 
         it 'returns record in order, column and direction as hash' do
           @order = Post.where(:title => 'title').send(method, title: :desc)
 
-          case Globalize::Test::Database.driver
-          when 'mysql'
-            assert_match(/ORDER BY `post_translations`.`title` DESC/, @order.to_sql)
-          else
-            assert_match(/ORDER BY "post_translations"."title" DESC/, @order.to_sql)
-          end
+          assert_match(/ORDER BY \(SELECT/i, @order.to_sql)
+          assert_match(/DESC/, @order.to_sql)
+          assert_equal [], @order.joins_values
         end
 
         it 'returns record in order, columns in an array' do
           @order = Post.where(title: 'title').send(method, [:title, :content])
 
-          case Globalize::Test::Database.driver
-          when 'mysql'
-            assert_match(/ORDER BY `post_translations`.`title` ASC/, @order.to_sql)
-          else
-            assert_match(/ORDER BY "post_translations"."title" ASC/, @order.to_sql)
-          end
+          assert_match(/ORDER BY \(SELECT/i, @order.to_sql)
+          assert_match(/title/i, @order.to_sql)
+          assert_match(/content/i, @order.to_sql)
         end
 
-        it 'returns record in order, leaving string untouched' do
+        it 'rewrites a bare translated column in a string order' do
           @order = Post.where(:title => 'title').send(method, 'title ASC')
-          assert_equal ['title ASC'], @order.order_values
+          assert_match(/ORDER BY \(SELECT/i, @order.to_sql)
+          assert_equal [], @order.joins_values
+        end
+
+        it 'leaves arbitrary SQL order strings untouched' do
+          @order = Post.where(:title => 'title').send(method, 'LOWER(title) ASC')
+          assert_equal ['LOWER(title) ASC'], @order.order_values
         end
 
         it 'generates a working query' do
@@ -101,9 +106,10 @@ class TranslatedAttributesQueryTest < Minitest::Spec
           assert Post.connection.execute(sql)
         end
 
-        it 'returns relation that includes translated attribute' do
+        it 'orders translated columns without joining every fallback locale' do
           @order = Post.send(method, :title)
-          assert_equal [:translations], @order.joins_values
+          assert_equal [], @order.joins_values
+          assert_match(/ORDER BY \(SELECT/i, @order.to_sql)
         end
       end
 
@@ -150,14 +156,10 @@ class TranslatedAttributesQueryTest < Minitest::Spec
         it 'returns record in order, column and direction as hash' do
           @order = Post.where(:title => 'title').send(method, title: :desc, id: :asc)
 
-          case Globalize::Test::Database.driver
-          when 'mysql'
-            assert_match(/ORDER BY `post_translations`.`title` DESC/, @order.to_sql)
-            assert_match(/`id` ASC/, @order.to_sql)
-          else
-            assert_match(/ORDER BY "post_translations"."title" DESC/, @order.to_sql)
-            assert_match(/"id" ASC/, @order.to_sql)
-          end
+          assert_match(/ORDER BY \(SELECT/i, @order.to_sql)
+          assert_match(/DESC/, @order.to_sql)
+          assert_match(/"id" ASC|`id` ASC/, @order.to_sql)
+          assert_equal [], @order.joins_values
         end
 
         it 'returns record in order, leaving string untouched' do
@@ -170,9 +172,10 @@ class TranslatedAttributesQueryTest < Minitest::Spec
           assert Post.connection.execute(sql)
         end
 
-        it 'returns relation that includes translated attribute' do
+        it 'orders mixed columns without a translations join' do
           @order = Post.send(method, :title, :id)
-          assert_equal [:translations], @order.joins_values
+          assert_equal [], @order.joins_values
+          assert_match(/ORDER BY \(SELECT/i, @order.to_sql)
         end
       end
     end
@@ -183,16 +186,11 @@ class TranslatedAttributesQueryTest < Minitest::Spec
       it 'returns only selected attributes' do
         @rel = Post.send(method, :title)
 
-        if Globalize.rails_61?
-          # Rails 6.1 and later quote the translated column name
-          case Globalize::Test::Database.driver
-          when 'mysql'
-            assert_match(/`post_translations`.`title`/, @rel.to_sql)
-          else
-            assert_match(/"post_translations"."title"/, @rel.to_sql)
-          end
+        case Globalize::Test::Database.driver
+        when 'mysql'
+          assert_match(/`post_translations`.`title`/, @rel.to_sql)
         else
-          assert_match(/post_translations.title/, @rel.to_sql)
+          assert_match(/"post_translations"."title"/, @rel.to_sql)
         end
       end
 
@@ -235,21 +233,11 @@ class TranslatedAttributesQueryTest < Minitest::Spec
       it 'returns only selected attributes' do
         @rel = Post.send(method, :title, :id)
 
-        if Globalize.rails_61?
-          # Rails 6.1 and later quote the translated column name
-          case Globalize::Test::Database.driver
-          when 'mysql'
-            assert_match(/`post_translations`.`title`, `posts`.`id`/, @rel.to_sql)
-          else
-            assert_match(/"post_translations"."title", "posts"."id"/, @rel.to_sql)
-          end
+        case Globalize::Test::Database.driver
+        when 'mysql'
+          assert_match(/`post_translations`.`title`, `posts`.`id`/, @rel.to_sql)
         else
-          case Globalize::Test::Database.driver
-          when 'mysql'
-            assert_match(/post_translations.title, `posts`.`id`/, @rel.to_sql)
-          else
-            assert_match(/post_translations.title, "posts"."id"/, @rel.to_sql)
-          end
+          assert_match(/"post_translations"."title", "posts"."id"/, @rel.to_sql)
         end
       end
 
@@ -315,7 +303,8 @@ class TranslatedAttributesQueryTest < Minitest::Spec
     end
 
     it 'does not join translations table if query contains no translated attributes' do
-      assert_equal [:translations], User.where.not(:name => 'foo').joins_values
+      assert_equal [], User.where.not(:name => 'foo').joins_values
+      assert_match(/NOT EXISTS/i, User.where.not(:name => 'foo').to_sql)
       assert_equal [], User.where.not(:email => 'foo@example.com').joins_values
     end
 

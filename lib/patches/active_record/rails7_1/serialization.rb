@@ -1,19 +1,25 @@
 module Globalize
   module AttributeMethods
     module Serialization
-      def serialize(attr_name, class_name_or_coder = Object, **options)
-        super(attr_name, **options)
-
-        coder = if class_name_or_coder == ::JSON
-                  ::ActiveRecord::Coders::JSON
-                elsif [:load, :dump].all? { |x| class_name_or_coder.respond_to?(x) }
-                  class_name_or_coder
-                else
-                  ::ActiveRecord::Coders::YAMLColumn.new(attr_name, class_name_or_coder)
-                end
-
+      def serialize(attr_name, class_name_or_coder = nil, **options)
         self.globalize_serialized_attributes = globalize_serialized_attributes.dup
-        self.globalize_serialized_attributes[attr_name] = coder
+
+        if class_name_or_coder.nil?
+          self.globalize_serialized_attributes[attr_name] = options
+
+          super(attr_name, **options)
+        elsif class_name_or_coder.is_a?(Hash)
+          self.globalize_serialized_attributes[attr_name] = class_name_or_coder
+
+          # https://github.com/rails/rails/blob/7-2-stable/activerecord/lib/active_record/attribute_methods/serialization.rb#L183
+          super(attr_name, **class_name_or_coder)
+        else
+          self.globalize_serialized_attributes[attr_name] = [class_name_or_coder, options]
+
+          # this is only needed for ACTIVE_RECORD_71. class_name_or_coder will be removed with Rails 7.2
+          # https://github.com/rails/rails/blob/7-1-stable/activerecord/lib/active_record/attribute_methods/serialization.rb#L183
+          super(attr_name, class_name_or_coder, **options)
+        end
       end
     end
   end

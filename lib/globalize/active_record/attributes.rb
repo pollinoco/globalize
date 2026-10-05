@@ -11,11 +11,15 @@ module Globalize
       end
 
       def contains?(locale, name)
-        self[locale].has_key?(name.to_s)
+        locale = locale.to_sym
+        key?(locale) && self[locale].key?(name.to_s)
       end
 
       def read(locale, name)
-        self[locale][name.to_s]
+        locale = locale.to_sym
+        return unless key?(locale)
+
+        self.fetch(locale)[name.to_s]
       end
 
       def write(locale, name, value)
