@@ -23,6 +23,7 @@ Otros fallos que se veían al leer o guardar:
 | `where(title: "x")`, `find_by`, `exists?` | `EXISTS` sobre los idiomas de fallback, en **una** fila de traducción. Varios atributos del mismo `where` se exigen en esa misma fila. |
 | `where.not(title: "x")` | `NOT EXISTS`. El registro se excluye si **algún** idioma de la cadena tiene ese valor. |
 | `order(:title)`, `order("title ASC")` | Subconsulta escalar: elige el primer idioma de la cadena con valor no nulo (`<> ''` solo si el modelo tiene `fallbacks_for_empty_translations`). |
+| `distinct.order(:title)` | La misma subconsulta va también en el `SELECT`, como exige PostgreSQL. `pluck` devuelve solo las columnas pedidas. |
 | `with_translations(:es)` y luego `where` | Sigue filtrando la fila ya unida. No se sustituye por `EXISTS`. |
 | `select`, `pluck`, `group`, `calculate` | Siguen haciendo `JOIN`. Hacen falta las columnas en el `SELECT`. |
 | `order("LOWER(title)")`, `order("p.title ASC")` | SQL libre: no se reescribe. |

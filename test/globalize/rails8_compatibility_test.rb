@@ -91,6 +91,17 @@ class Rails8CompatibilityTest < Minitest::Spec
       assert_equal Product.count, ordered.size
     end
 
+    it "orders a DISTINCT relation by a translated column" do
+      first = Product.create!(:name => "bravo")
+      second = Product.create!(:name => "alpha")
+
+      relation = Product.distinct.order(:name)
+      assert_equal [second, first], relation.to_a
+      assert_equal [second, first], Product.order(:name).distinct.to_a
+      assert_equal [second.id, first.id], relation.pluck(:id)
+      assert_equal 2, relation.count
+    end
+
     it "rewrites order('title ASC') onto the translations table" do
       sql = Post.order("title ASC").to_sql
       assert_match(/ORDER BY \(SELECT/i, sql)

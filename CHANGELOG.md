@@ -1,5 +1,9 @@
 # Globalize Changelog
 
+## 8.0.1 (2026-10-04)
+
+* Corrige `distinct.order(:title)` en PostgreSQL, que fallaba con `for SELECT DISTINCT, ORDER BY expressions must appear in select list`. Con `distinct`, la subconsulta del orden se añade al `SELECT`; `pluck` la descarta de cada fila y `count` no cambia.
+
 ## 8.0.0 (2026-10-04)
 
 * Filtra atributos traducidos con `EXISTS` en lugar de un `JOIN` + `DISTINCT` por cada idioma de fallback. Así `where`, `find_by`, `exists?` y `count` devuelven una fila por registro y usan el índice de la tabla de traducciones.

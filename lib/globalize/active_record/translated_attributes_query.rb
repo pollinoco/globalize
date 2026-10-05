@@ -57,13 +57,20 @@ module Globalize
       end
 
       def order(*args)
-        rewritten = rewrite_order_args(args)
-        rewritten ? super(*rewritten) : super
+        rewritten, selects = rewrite_order_args(args)
+        return super unless rewritten
+
+        relation = super(*rewritten)
+        previous = Array(instance_variable_get(:@globalize_order_selects))
+        relation.instance_variable_set(:@globalize_order_selects, previous + selects)
+        relation
       end
 
       def reorder(*args)
-        rewritten = rewrite_order_args(args)
-        rewritten ? super(*rewritten) : super
+        rewritten, selects = rewrite_order_args(args)
+        relation = rewritten ? super(*rewritten) : super
+        relation.instance_variable_set(:@globalize_order_selects, selects || [])
+        relation
       end
 
       def group(*columns)
@@ -104,6 +111,15 @@ module Globalize
       def pluck(*column_names)
         if respond_to?(:translated_attribute_names) && parsed = parse_translated_columns(column_names)
           join_translations.pluck(*parsed)
+        elsif distinct_value && column_names.any? && instance_variable_get(:@globalize_order_selects).present?
+          # pluck replaces the SELECT list, so the order subqueries that DISTINCT
+          # needs are plucked too and dropped from each row.
+          extra = instance_variable_get(:@globalize_order_selects).uniq
+          relation = spawn
+          relation.instance_variable_set(:@globalize_order_selects, nil)
+          rows = relation.pluck(*column_names, *extra.map { |sql| Arel.sql(sql) })
+          size = column_names.size
+          rows.map { |row| size == 1 ? row.first : row.first(size) }
         else
           super
         end
@@ -200,12 +216,26 @@ module Globalize
 
       private
 
+      # PostgreSQL rejects SELECT DISTINCT unless every ORDER BY expression is
+      # also in the select list. Project the fallback subqueries only then.
+      def build_select(arel)
+        super
+        return unless distinct_value
+
+        Array(instance_variable_get(:@globalize_order_selects)).uniq.each do |sql|
+          arel.project(Arel.sql(sql))
+        end
+      end
+
+      # Returns [rewritten_args, translated_subqueries], or nil when no
+      # argument names a translated column.
       def rewrite_order_args(args)
         return unless respond_to?(:translated_attribute_names)
 
+        selects = []
         changed = false
         rewritten = args.flat_map do |arg|
-          parsed = parse_translated_order(arg)
+          parsed = parse_translated_order(arg, selects)
           if parsed
             changed = true
             parsed
@@ -213,7 +243,7 @@ module Globalize
             [arg]
           end
         end
-        rewritten if changed
+        [rewritten, selects] if changed
       end
 
       # One scalar subquery per translated column, in fallback order. This does
@@ -252,14 +282,16 @@ module Globalize
         "AND #{translation}.#{quoted_column} <> ''"
       end
 
-      def order_node_for(column, direction)
+      def order_node_for(column, direction, selects)
         dir = normalize_order_direction(direction)
         if translated_column?(column)
+          subquery = fallback_value_sql(column)
+          selects << subquery
           # NULLS LAST keeps records without a translation in this fallback chain
           # at the end. An INNER JOIN used to drop them, which hid products.
           # MySQL has no NULLS LAST clause; NULL already sorts first there.
           nulls = connection.adapter_name.to_s.downcase.include?("mysql") ? "" : " NULLS LAST"
-          Arel.sql("#{fallback_value_sql(column)} #{dir}#{nulls}")
+          Arel.sql("#{subquery} #{dir}#{nulls}")
         else
           arel_table[column.to_s].public_send(dir == "DESC" ? :desc : :asc)
         end
@@ -269,27 +301,27 @@ module Globalize
         direction.to_s.casecmp("desc").zero? ? "DESC" : "ASC"
       end
 
-      def parse_translated_order(opts)
+      def parse_translated_order(opts, selects = [])
         case opts
         when Hash
           return nil unless opts.any? { |column, _direction| translated_column?(column) }
 
-          opts.map { |column, direction| order_node_for(column, direction) }
+          opts.map { |column, direction| order_node_for(column, direction, selects) }
         when Symbol
           return nil unless translated_column?(opts)
 
-          [order_node_for(opts, :asc)]
+          [order_node_for(opts, :asc, selects)]
         when String
           # `order("title ASC")` is raw SQL and would hit the parent table, where
           # the column often no longer exists. Rewrite only a bare column name.
           match = opts.match(/\A\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s+(ASC|DESC))?\s*\z/i)
           return nil unless match && translated_column?(match[1])
 
-          [order_node_for(match[1], match[2] || :asc)]
+          [order_node_for(match[1], match[2] || :asc, selects)]
         when Array
           return nil unless opts.any? { |column| translated_column?(column) }
 
-          opts.map { |column| order_node_for(column, :asc) }
+          opts.map { |column| order_node_for(column, :asc, selects) }
         else
           nil
         end
