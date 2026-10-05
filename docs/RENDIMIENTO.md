@@ -1,4 +1,4 @@
-# Globalize 7.2 y Rails 8
+# Globalize 8.0 y Rails 8
 
 Esta versión parte de Globalize 7.1.3 (Rails 7.0 hasta 8.1, Ruby 3.4) y corrige el comportamiento que más duele en un catálogo con dos idiomas (`es` → `en`, `en` → `es`).
 

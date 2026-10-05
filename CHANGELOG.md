@@ -1,6 +1,6 @@
 # Globalize Changelog
 
-## 7.2.0 (2026-10-04)
+## 8.0.0 (2026-10-04)
 
 * Filtra atributos traducidos con `EXISTS` en lugar de un `JOIN` + `DISTINCT` por cada idioma de fallback. Así `where`, `find_by`, `exists?` y `count` devuelven una fila por registro y usan el índice de la tabla de traducciones.
 * Ordena columnas traducidas con una subconsulta que respeta la cadena de fallbacks, sin duplicar filas y sin chocar con `GROUP BY`. También reescribe `order("title ASC")` cuando `title` es un atributo traducido; el SQL libre (`LOWER(title)`, columnas cualificadas) se deja igual.
